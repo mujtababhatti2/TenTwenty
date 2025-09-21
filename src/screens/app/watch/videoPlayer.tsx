@@ -63,7 +63,8 @@ const VideoPlay = ({ navigation, route }: props) => {
                 onLoadStart={() => setPlayer(true)}
                 onEnd={() => navigation.goBack()}
                 loop={false}
-                autoplay
+                autoplay={true}
+                disableFullscreen={false}
             />
             {!player && (
                 <ActivityIndicator color={'white'} size={'large'}
