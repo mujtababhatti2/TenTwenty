@@ -1,9 +1,15 @@
-import { FlatList, ScrollView, StyleSheet, Text, View } from "react-native";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useCallback, useState } from "react";
+import {
+  FlatList,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  StatusBar,
+} from "react-native";
 import { LoadingComp } from "../../../components/gerenal/loadingComp";
 import { ApiInstance, api_key } from "../../../service/apiInstance";
 import { colors } from "../../../assets/utilities";
-import { StatusBar } from "react-native";
 import { MovieListComp } from "../../../components/feeds/movieListComp";
 import { scale, vtscale } from "../../../assets/constants/pixelRatio";
 import { HeaderComp } from "../../../components/gerenal/header";
@@ -16,72 +22,85 @@ import LinearGradient from "react-native-linear-gradient";
 import { fontFamily } from "../../../assets/utilities/font";
 import SearchComp from "../../../components/feeds/searchComp";
 
-interface movieListProps {
-  navigation: any;
-  route: any;
-}
+// Redux
+import { useDispatch, useSelector } from "react-redux";
+import {
+  setLoading,
+  setUpcoming,
+  setGenres,
+  setSearchQuery,
+  setSearchResults,
+} from "../../../store/slices/moviesSlice";
 
-const List = ({ navigation, route }: movieListProps) => {
-  const [loading, setLoading] = useState<boolean>(true);
-  const [data, setData] = useState<Array<object> | any>([]);
-  const [searchFlag, setSearchFlag] = useState(false);
-  const [search, setSearch] = useState("");
-  const [searchData, setSearchData] = useState([]);
-  const [genres, setGenres] = useState<Array<object> | any>([]);
+type RootState = {
+  movies?: {
+    loading?: boolean;
+    upcoming?: any[];
+    genres?: any[];
+    searchQuery?: string;
+    searchResults?: any[];
+  };
+};
 
+const List = ({ navigation }: { navigation: any }) => {
+  const dispatch = useDispatch();
+
+  // SAFE selector with defaults — prevents undefined during first render/rehydration
+  const {
+    loading = false,
+    upcoming = [],
+    genres = [],
+    searchQuery = "",
+    searchResults = [],
+  } = useSelector((state: RootState) => state?.movies ?? {});
+
+  // UI-only toggle can stay local
+  const [searchFlag, setSearchFlag] = useState<boolean>(false);
+
+  // Fetch once on mount (don’t tie to searchFlag to avoid refetch on toggle)
   useEffect(() => {
-    handleGetMovies();
-  }, [searchFlag]);
+    const run = async () => {
+      try {
+        dispatch(setLoading(true));
 
-  const handleGetMovies = () => {
-    try {
-      ApiInstance.get(`/movie/upcoming?api_key=${api_key}`)
-        .then((res) => {
-          console.log(res);
-          setData(res.data);
-          handlegetGenres();
-        })
-        .catch((err) => {
-          console.log(err);
-        });
-    } catch (error) {
-      console.log(error);
-    }
-  };
+        const upc = await ApiInstance.get(`/movie/upcoming?api_key=${api_key}`);
+        const upcomingResults = Array.isArray(upc?.data?.results)
+          ? upc.data.results
+          : [];
+        dispatch(setUpcoming(upcomingResults));
 
-  const handlegetGenres = () => {
-    try {
-      ApiInstance.get(`genre/movie/list?language=en&api_key=${api_key}`)
-        .then((res) => {
-          console.log({ data: res.data?.genres });
-          setGenres(res?.data?.genres);
-        })
-        .catch((err) => {
-          console.log(err);
-        })
-        .finally(() => {
-          setLoading(false);
-        });
-    } catch (error) {
-      console.log(error);
-    }
-  };
+        const gen = await ApiInstance.get(
+          `genre/movie/list?language=en&api_key=${api_key}`
+        );
+        const genList = Array.isArray(gen?.data?.genres) ? gen.data.genres : [];
+        dispatch(setGenres(genList));
+      } catch (error) {
+        console.log(error);
+      } finally {
+        dispatch(setLoading(false));
+      }
+    };
+    run();
+  }, [dispatch]);
 
-  const handleRenderItem = (item: object | any, index: number) => {
-    return (
-      <MovieListComp
-        image={{ uri: `https://image.tmdb.org/t/p/w500${item?.backdrop_path}` }}
-        title={item?.original_title}
-        onPress={() => {
-          navigation.navigate("MovieDetail", {
-            movieId: item?.id,
-          });
-        }}
-      />
-    );
-  };
+  const handleRenderItem = useCallback(
+    (item: any) => {
+      return (
+        <MovieListComp
+          image={{
+            uri: `https://image.tmdb.org/t/p/w500${item?.backdrop_path}`,
+          }}
+          title={item?.original_title}
+          onPress={() => {
+            navigation.navigate("MovieDetail", { movieId: item?.id });
+          }}
+        />
+      );
+    },
+    [navigation]
+  );
 
-  const handleGenresItem = (item: any, index: any) => {
+  const handleGenresItem = useCallback((item: any) => {
     return (
       <View style={styles.mainView}>
         <View style={styles.linear}>
@@ -89,84 +108,96 @@ const List = ({ navigation, route }: movieListProps) => {
             style={styles.linearView}
             colors={["rgba(0,0,0,0)", "rgba(0,0,0,0.5)"]}
           >
-            <Text style={styles.textName}>{item.name}</Text>
+            <Text style={styles.textName}>{item?.name ?? ""}</Text>
           </LinearGradient>
         </View>
       </View>
     );
-  };
+  }, []);
 
-  const handleSearch = (query: string) => {
-    const filteredItems = data?.results?.filter((item: any) =>
-      item.title.toLowerCase().includes(query.toLowerCase())
-    );
-    console.log(filteredItems);
+  // Safe search handler (never passes undefined to inputs/components)
+  const handleSearch = useCallback(
+    (query?: string) => {
+      const q = String(query ?? "");
+      dispatch(setSearchQuery(q));
 
-    setSearchData(filteredItems);
-    setSearch(query);
-  };
+      if (q.length < 1) {
+        dispatch(setSearchResults([]));
+        return;
+      }
+
+      const base = Array.isArray(upcoming) ? upcoming : [];
+      const filtered = base.filter((m: any) =>
+        String(m?.title ?? "").toLowerCase().includes(q.toLowerCase())
+      );
+      dispatch(setSearchResults(filtered));
+    },
+    [dispatch, upcoming]
+  );
+
+  // Data guards for FlatList to avoid crashes + keyExtractor safety
+  const safeUpcoming = Array.isArray(upcoming) ? upcoming : [];
+  const safeGenres = Array.isArray(genres) ? genres : [];
+  const safeSearchResults = Array.isArray(searchResults) ? searchResults : [];
 
   return (
     <View style={styles.container}>
       <StatusBar
-        translucent={true}
+        translucent
         barStyle={"dark-content"}
         backgroundColor={"transparent"}
       />
       <LoadingComp loading={loading} title="Fetching..." />
+
       <HeaderComp
         title={"Watch"}
         flag={searchFlag}
-        onPress={() => {
-          setSearchFlag(true);
-        }}
+        onPress={() => setSearchFlag(true)}
         onPressSearch={() => {
           setSearchFlag(false);
+          handleSearch(""); // clear safely
         }}
-        onChangeText={(text: string) => handleSearch(text)}
-        value={search}
+        onChangeText={handleSearch}
+        value={searchQuery ?? ""} // force a string; prevents hasValue crash
       />
+
       <ScrollView style={styles.wrapper} showsVerticalScrollIndicator={false}>
         {searchFlag ? (
           <>
-            {search.length > 2 ? (
+            {searchQuery?.length > 2 ? (
               <FlatList
                 scrollEnabled={false}
-                data={searchData}
+                data={safeSearchResults}
                 numColumns={2}
-                keyExtractor={(item: any) => item?.id.toString()}
-                renderItem={({ item, index }) => {
-                  return (
-                    <SearchComp
-                      image={{
-                        uri: `https://image.tmdb.org/t/p/w500${item?.backdrop_path}`,
-                      }}
-                      title={item?.title}
-                      genre={""}
-                    />
-                  );
-                }}
+                keyExtractor={(item) => String(item?.id ?? Math.random())}
+                renderItem={({ item }) => (
+                  <SearchComp
+                    image={{
+                      uri: `https://image.tmdb.org/t/p/w500${
+                        item?.backdrop_path ?? ""
+                      }`,
+                    }}
+                    title={item?.title ?? ""}
+                    genre={""}
+                  />
+                )}
               />
             ) : (
               <FlatList
                 scrollEnabled={false}
-                data={genres}
+                data={safeGenres}
                 numColumns={2}
-                keyExtractor={(item) => item.id.toString()}
-                renderItem={({ item, index }) => {
-                  return handleGenresItem(item, index);
-                }}
+                keyExtractor={(item) => String(item?.id ?? Math.random())}
+                renderItem={({ item }) => handleGenresItem(item)}
               />
             )}
           </>
         ) : (
           <FlatList
             scrollEnabled={false}
-            data={data?.results}
-            keyExtractor={(item) => item.id.toString()}
-            renderItem={({ item, index }) => {
-              return handleRenderItem(item, index);
-            }}
+            data={safeUpcoming}
+            keyExtractor={(item) => String(item?.id ?? Math.random())}
+            renderItem={({ item }) => handleRenderItem(item)}
           />
         )}
         <View style={{ height: vtscale(80) }} />
@@ -178,23 +209,15 @@ const List = ({ navigation, route }: movieListProps) => {
 export default List;
 
 const styles = StyleSheet.create({
-  container: {
-    backgroundColor: colors.primary,
-    flex: 1,
-  },
-  wrapper: {
-    width: "90%",
-    alignSelf: "center",
-  },
+  container: { backgroundColor: colors.primary, flex: 1 },
+  wrapper: { width: "90%", alignSelf: "center" },
   mainView: {
     width: scale(150),
     backgroundColor: "rgba(255,255,255,0.3)",
     marginRight: scale(10),
     marginBottom: responsiveHeight(2),
   },
-  linear: {
-    height: responsiveHeight(12),
-  },
+  linear: { height: responsiveHeight(12) },
   linearView: {
     height: "100%",
     borderRadius: responsiveWidth(3),
